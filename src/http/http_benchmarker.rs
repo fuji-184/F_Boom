@@ -79,8 +79,10 @@ pub fn http_benchmark() {
         }
 
         for val in app_handles.iter_mut() {
-            let pid = val.app.id().unwrap();
-            crate::features::memory_usage(pid).await;
+            //let pid = val.app.id().unwrap();
+            //let memory = crate::features::memory_usage(pid).await;
+
+            //println!("memory: {}", memory);
             val.app.kill().await.unwrap();
             if let Some(perf) = &mut val.perf {
                 perf.wait().await.unwrap();
