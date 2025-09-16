@@ -1,13 +1,24 @@
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-pub fn run_app() -> Result<tokio::process::Child, Box<dyn std::error::Error>> {
-  let mut backend_ready = false;
-    
-    let child_result = tokio::process::Command::new("./tes/target/release/tes")
-        .kill_on_drop(true)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
+pub fn run_app(
+    app_config: &crate::config_reader::App,
+) -> Result<(tokio::process::Child, Option<tokio::process::Child>), Box<dyn std::error::Error>> {
+    let mut backend_ready = false;
+    let command = app_config.command.clone().unwrap();
+    let perf = app_config.perf.unwrap();
+    let child_result = match command.args {
+        Some(args) => tokio::process::Command::new(command.first.clone())
+            .args(args)
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn(),
+        None => tokio::process::Command::new(command.first.clone())
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn(),
+    };
 
     let mut child = match child_result {
         Ok(handle) => {
@@ -15,52 +26,107 @@ pub fn run_app() -> Result<tokio::process::Child, Box<dyn std::error::Error>> {
             handle
         }
         Err(e) => {
-            println!("failed to start backend: {:?}", e);
+            println!("failed to start {}, reason : {:?}", command.first, e);
             return Err(Box::new(e));
         }
     };
+
     let pid = child.id().unwrap();
-    
-    println!("waiting backend for ready");
-    while !backend_ready {
-      
-    }
-    println!("backend is ready");
-    
-    println!("Backend started with pid {}", pid);
-    
+
+    println!("waiting {} for ready", command.first);
+    while !backend_ready {}
+    println!("{} is ready", command.first);
+
+    println!("{} started with pid {}", command.first, pid);
+
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    
-    app_stdout(stdout);
-    app_stderr(stderr, pid);
-    
-    Ok(child)
+
+    app_stdout(stdout, &command.first);
+    app_stderr(stderr, pid, &command.first);
+
+    if perf {
+        let perf = run_perf(pid, &command.first).expect("failed to start perf");
+        return Ok((child, Some(perf)));
+    }
+
+    Ok((child, None))
+}
+
+fn run_perf(pid: u32, command: &str) -> Result<tokio::process::Child, Box<std::io::Error>> {
+    let perf_result = tokio::process::Command::new("perf")
+        .arg("stat")
+        .arg("-e")
+        .arg("cycles,task-clock,context-switches,cpu-migrations,instructions,branches,branch-misses,cache-references,cache-misses,page-faults")
+        .arg("-p")
+        .arg(pid.to_string())
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+
+    let mut perf_ready = false;
+
+    let mut perf = match perf_result {
+        Ok(handle) => {
+            perf_ready = true;
+            handle
+        }
+        Err(e) => {
+            println!("failed to start perf: {:?}", e);
+            return Err(Box::new(e));
+        }
+    };
+
+    while !perf_ready {}
+    println!("perf is ready");
+
+    let perf_stderrr = perf.stderr.take().unwrap();
+    let perf_pid = perf.id().unwrap();
+    perf_stderr(perf_stderrr, perf_pid, command);
+
+    Ok(perf)
 }
 
 fn pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
-fn app_stdout(stdout: tokio::process::ChildStdout){
-  tokio::spawn(async move {
+fn app_stdout(stdout: tokio::process::ChildStdout, command: &str) {
+    let command = command.to_owned();
+    tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            println!("[backend stdout] {}", line);
+            println!("[{}] {}", command, line);
         }
     });
 }
 
-fn app_stderr(stderr: tokio::process::ChildStderr, pid: u32){
-  tokio::spawn(async move {
+fn app_stderr(stderr: tokio::process::ChildStderr, pid: u32, command: &str) {
+    let command = command.to_owned();
+    tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            eprintln!("[backend stderr] {}", line);
+            eprintln!("[{}] {}", command, line);
             if !pid_alive(pid) {
                 eprintln!("Backend crashed (pid gone)");
-              //return Ok(Box::new(()));
+                //return Ok(Box::new(()));
             }
         }
-      
+    });
+}
+
+fn perf_stderr(stderr: tokio::process::ChildStderr, pid: u32, command: &str) {
+    let command = command.to_owned();
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr).lines();
+
+        while let Ok(Some(line)) = reader.next_line().await {
+            eprintln!("[{}] {}", command, line);
+            if !pid_alive(pid) {
+                eprintln!("Perf crashed (pid gone)");
+                //return Ok(Box::new(()));
+            }
+        }
     });
 }

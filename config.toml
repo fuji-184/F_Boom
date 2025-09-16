@@ -1,0 +1,34 @@
+
+
+
+[[app]]
+perf = false
+command = { first = "./fiber/tes" }
+#command = { first = "./tes/target/release/tes" }
+
+[[app.http]]
+#url = "http://127.0.0.1:8080/4"
+url = "http://127.0.0.1:3000/4"
+max_concurrent = 100
+max_duration = 30
+batch_size = 100
+timeout = 20
+
+[[app.http]]
+#url = "http://127.0.0.1:8080/3"
+url = "http://127.0.0.1:3000/3"
+max_concurrent = 100
+max_duration = 30
+batch_size = 100
+timeout = 20
+
+
+#[[app]]
+#command = { first = "./fiber/tes" }
+#perf = false
+
+#[[app.http]]
+#url = "http://127.0.0.1:3000"
+#max_concurrent = 100
+#max_duration = 30
+#batch_size = 100

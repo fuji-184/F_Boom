@@ -1,62 +1,67 @@
 use crate::stats;
-use sysinfo::{System, Pid};
+use sysinfo::{Pid, System};
+use tokio::fs;
+use tokio::time::{Duration, interval};
 
-pub fn stats(duration: std::time::Duration, total_send: u64, mut times: Vec<u64>){
-    times.sort();
-    let success = times.len();
-    
+pub fn stats(mut hasil: crate::http::Hasil) {
+    hasil.times.sort();
+    let success = hasil.times.len();
+
     println!(
-        "Success      : {}/{} in {:.2} seconds",
+        "\n\nResult of {} on url {}:\nSuccess      : {}/{} in {:.2} seconds",
+        hasil.command,
+        hasil.url,
         success,
-        total_send,
-        duration.as_secs_f64()
+        hasil.total_send,
+        hasil.duration.as_secs_f64()
     );
-    
-    stats::success_rate(total_send, success);
-    stats::req_per_s(success, &duration);
-    stats::min_ms(&times);
-    stats::max_ms(&times);
-    stats::avg_ms(success, &times);
-    stats::median_ms(success, &times);
-    stats::mode_or_modus(&times);
-    stats::p90_p99(success, &times);
-    stats::grouped_ms(&times);
+
+    stats::success_rate(hasil.total_send, success);
+    stats::req_per_s(success, &hasil.duration);
+    stats::min_ms(&hasil.times);
+    stats::max_ms(&hasil.times);
+    stats::avg_ms(success, &hasil.times);
+    stats::median_ms(success, &hasil.times);
+    stats::mode_or_modus(&hasil.times);
+    stats::p90_p99(success, &hasil.times);
+    stats::grouped_ms(&hasil.times);
 }
 
-pub fn system_info(){
-  let mut sys = System::new_all();
+pub fn system_info() {
+    let mut sys = System::new_all();
 
     sys.refresh_all();
-    
+
     //std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
-    
+
     if let Some(val) = System::name() {
-      println!("\n\nSystem name    : {}", val);
+        println!("\n\nUsing machine:\nSystem name    : {}", val);
     }
-    
+
     if let Some(val) = System::kernel_version() {
-      println!("Kernel version : {}", val);
+        println!("Kernel version : {}", val);
     }
-    
+
     if let Some(val) = System::os_version() {
-      println!("OS version     : {}", val);
+        println!("OS version     : {}", val);
     }
-    
+
     if let Some(val) = System::host_name() {
-      println!("Host name      : {}", val);
+        println!("Host name      : {}", val);
     }
-    
+
     for (_, cpu) in sys.cpus().iter().enumerate() {
-      println!("CPU            : {}, {} cores {} {} {} mhz",
-        System::cpu_arch(),
-        sys.cpus().len(),
-        cpu.vendor_id(),
-        cpu.brand(),
-        cpu.frequency(),
-      );
-      break;
+        println!(
+            "CPU            : {}, {} cores {} {} {} mhz",
+            System::cpu_arch(),
+            sys.cpus().len(),
+            cpu.vendor_id(),
+            cpu.brand(),
+            cpu.frequency(),
+        );
+        break;
     }
-    
+
     /*
     println!("CPU usage (global): {:.2}%", sys.global_cpu_usage());
 
@@ -79,12 +84,53 @@ fn format_memory(bytes: u64) -> String {
     let kb = bytes as f64 / 1024.0;
     let mb = kb / 1024.0;
     let gb = mb / 1024.0;
-    
+
     if gb >= 1.0 {
         format!("{:.2} GB", gb)
     } else if mb >= 1.0 {
         format!("{:.2} MB", mb)
     } else {
         format!("{:.2} KB", kb)
+    }
+}
+
+async fn monitor_ram_proc(pid: u32) {
+    let mut ticker = interval(Duration::from_secs(5));
+
+    loop {
+        ticker.tick().await;
+        let command = format!("/proc/{}/status", pid);
+        if let Ok(content) = fs::read_to_string(command).await {
+            for line in content.lines() {
+                if line.starts_with("VmRSS:") {
+                    println!("[ram] {}", line); // contoh: "VmRSS:   123456 kB"
+                }
+            }
+        } else {
+            eprintln!("[ram] process {} sudah mati", pid);
+            break;
+        }
+    }
+}
+
+pub async fn memory_usage(pid: u32) -> String {
+    let path = format!("/proc/{}/smaps", pid);
+    let output = tokio::process::Command::new("grep")
+        .args(["-E", r"\[heap\]|\[stack\]", "-A", "15", &path])
+        .output()
+        .await
+        .unwrap();
+
+    let output2 = tokio::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "pid,ppid,cmd,%mem,rss,vsz"])
+        .output()
+        .await
+        .unwrap();
+    unsafe {
+        format!(
+            "{}\n{}",
+            String::from_utf8_unchecked(output.stdout),
+            String::from_utf8_unchecked(output2.stdout)
+        )
     }
 }

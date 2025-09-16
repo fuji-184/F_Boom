@@ -1,13 +1,13 @@
 use std::collections::HashMap;
-use sysinfo::{System, Pid, ProcessesToUpdate, ProcessRefreshKind};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-pub fn req_per_s(success: usize, duration: &std::time::Duration){
-  let req_per_sec = success as f64 / duration.as_secs_f64();
-  println!("Req/s        : {:.2}", req_per_sec);
+pub fn req_per_s(success: usize, duration: &std::time::Duration) {
+    let req_per_sec = success as f64 / duration.as_secs_f64();
+    println!("Req/s        : {:.2}", req_per_sec);
 }
 
-pub fn success_rate(total_send: u64, success: usize){
-  if total_send > 0 {
+pub fn success_rate(total_send: u64, success: usize) {
+    if total_send > 0 {
         println!(
             "Success rate : {:.2}%",
             (success as f64 / total_send as f64) * 100.0
@@ -17,26 +17,29 @@ pub fn success_rate(total_send: u64, success: usize){
     }
 }
 
-pub fn min_ms(times: &Vec<u64>){
-  let min_time = times.iter().min().unwrap();
-  let min_ms = *min_time as f64 / 1_000_000.0;
-  println!("Min          : {:.2} ms", min_ms);
+pub fn min_ms(times: &Vec<u64>) {
+    let min_time = times
+        .iter()
+        .min()
+        .expect("no http benchmark value is recorded");
+    let min_ms = *min_time as f64 / 1_000_000.0;
+    println!("Min          : {:.2} ms", min_ms);
 }
 
-pub fn max_ms(times: &Vec<u64>){
-  let max_time = times.iter().max().unwrap();
-  let max_ms = *max_time as f64 / 1_000_000.0;
-  println!("Max          : {:.2} ms", max_ms);
+pub fn max_ms(times: &Vec<u64>) {
+    let max_time = times.iter().max().unwrap();
+    let max_ms = *max_time as f64 / 1_000_000.0;
+    println!("Max          : {:.2} ms", max_ms);
 }
 
-pub fn avg_ms(success: usize, times: &Vec<u64>){
-  let total_times = times.iter().sum::<u64>();
-  let avg_ms = (total_times as f64 / success as f64) / 1_000_000.0;
-  println!("Avg          : {:.2} ms", avg_ms);
+pub fn avg_ms(success: usize, times: &Vec<u64>) {
+    let total_times = times.iter().sum::<u64>();
+    let avg_ms = (total_times as f64 / success as f64) / 1_000_000.0;
+    println!("Avg          : {:.2} ms", avg_ms);
 }
 
-pub fn median_ms(success: usize, times: &Vec<u64>){
-  let median_ms = if success % 2 == 0 {
+pub fn median_ms(success: usize, times: &Vec<u64>) {
+    let median_ms = if success % 2 == 0 {
         let mid = success / 2;
         (times[mid - 1] + times[mid]) as f64 / 2.0 / 1_000_000.0
     } else {
@@ -53,7 +56,8 @@ pub fn mode_or_modus(times: &Vec<u64>) {
 
     let max_count = freq.values().copied().max().unwrap_or(0);
 
-    let modes: Vec<_> = freq.into_iter()
+    let modes: Vec<_> = freq
+        .into_iter()
         .filter(|&(_, count)| count == max_count)
         .map(|(val, _)| val as f64 / 1_000_000.0)
         .collect();
@@ -65,8 +69,8 @@ pub fn mode_or_modus(times: &Vec<u64>) {
     }
 }
 
-pub fn p90_p99(success: usize, times: &Vec<u64>){
-  let p90_idx = (0.90 * (success as f64 - 1.0)) as usize;
+pub fn p90_p99(success: usize, times: &Vec<u64>) {
+    let p90_idx = (0.90 * (success as f64 - 1.0)) as usize;
     let p99_idx = (0.99 * (success as f64 - 1.0)) as usize;
     let p90_ms = times[p90_idx] as f64 / 1_000_000.0;
     let p99_ms = times[p99_idx] as f64 / 1_000_000.0;
@@ -74,15 +78,15 @@ pub fn p90_p99(success: usize, times: &Vec<u64>){
     println!("p99          : {:.2} ms", p99_ms);
 }
 
-pub fn grouped_ms(times: &Vec<u64>){
-  let mut buckets = [0u64; 11];
+pub fn grouped_ms(times: &Vec<u64>) {
+    let mut buckets = [0u64; 11];
 
     for t_ns in times.iter() {
         let t_ms = *t_ns / 1_000_000;
         match t_ms {
-            0..=10   => buckets[0] += 1,
-            11..=20   => buckets[1] += 1,
-            21..=30   => buckets[2] += 1,
+            0..=10 => buckets[0] += 1,
+            11..=20 => buckets[1] += 1,
+            21..=30 => buckets[2] += 1,
             31..=40 => buckets[3] += 1,
             41..=50 => buckets[4] += 1,
             51..=70 => buckets[5] += 1,
@@ -107,14 +111,13 @@ pub fn grouped_ms(times: &Vec<u64>){
     println!("301ms+       : {}", buckets[10]);
 }
 
-pub fn cpu_usage(s: &mut System, child: &tokio::process::Child){
-  s.refresh_processes_specifics(
-    ProcessesToUpdate::All,
-    true,
-    ProcessRefreshKind::nothing().with_cpu()
-  );
-  if let Some(process) = s.process(Pid::from(child.id().unwrap() as usize)) {
-    println!("CPU utilization: {}%", process.cpu_usage());
-    
-  }
+pub fn cpu_usage(s: &mut System, child: &tokio::process::Child) {
+    s.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_cpu(),
+    );
+    if let Some(process) = s.process(Pid::from(child.id().unwrap() as usize)) {
+        println!("CPU utilization: {}%", process.cpu_usage());
+    }
 }
