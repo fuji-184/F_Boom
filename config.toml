@@ -1,27 +1,52 @@
 
 
-
 [[app]]
 perf = false
+#command = { first = "./cli/target/release/cli" }
 #command = { first = "./fiber/tes" }
-command = { first = "./tes/target/release/tes" }
+#command = { first = "./tes/target/release/tes" }
+
+#command = { first = "../Experiments/lessons/266/app-uws/build/server" }
+#command = { first = "../Experiments/lessons/266/app-drogon/build/server" }
+#command = { first = "../Experiments/lessons/266/app-may/target/release/app-may" }
+#command = { first = "../Experiments/lessons/266/app-actix/target/release/app-axum" }
+#command = { first = "../Experiments/lessons/266/app-ntex/target/release/app-ntex" }
+#command = { first = "../Experiments/lessons/266/app-fiber/app-fiber" }
+
+terminal = false
+
+
+[[app.grpc]]
+url = "http://127.0.0.1:50051"
+max_concurrent = 50
+max_duration = 30
+#mode = "2_way_stream"
+mode = "ping"
+
+[[app.ws]]
+url = "ws://127.0.0.1:8080/ws"
+max_concurrent = 50
+max_duration = 30
+payload = {type = "ping", val = "tes"}
 
 [[app.http]]
-url = "http://127.0.0.1:8080/4"
+#url = "http://localhost:8080/api/v3/ticker/bookTicker"
+url = "http://127.0.0.1:8080"
 #url = "http://127.0.0.1:3000/4"
-max_concurrent = 100
-max_duration = 30
-batch_size = 100
-timeout = 20
+max_concurrent = 50
+max_duration = 5
+timeout = 5
+mode = ["http1"]
+method = "get"
+payload = {type = "json", val = """
+tes
+"""}
 
-[[app.http]]
-url = "http://127.0.0.1:8080/3"
+#[[app.http]]
+#url = "http://127.0.0.1:8080/3"
 #url = "http://127.0.0.1:3000/3"
-max_concurrent = 100
-max_duration = 30
-batch_size = 100
-timeout = 20
-
+#max_concurrent = 100
+#max_duration = 30
 
 #[[app]]
 #command = { first = "./fiber/tes" }
@@ -32,3 +57,7 @@ timeout = 20
 #max_concurrent = 100
 #max_duration = 30
 #batch_size = 100
+
+#[app.cli]
+#max_run = 10
+#max_duration = 10

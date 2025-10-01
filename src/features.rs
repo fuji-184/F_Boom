@@ -16,15 +16,25 @@ pub fn stats(mut hasil: crate::http::Hasil) {
         hasil.duration.as_secs_f64()
     );
 
+    println!("success: {}", hasil.times.len());
+
+    let mut times = vec![];
+    for val in hasil.times.iter() {
+        let time = val.as_nanos() as u64;
+        times.push(time);
+    }
+
+    drop(hasil.times);
+
     stats::success_rate(hasil.total_send, success);
     stats::req_per_s(success, &hasil.duration);
-    stats::min_ms(&hasil.times);
-    stats::max_ms(&hasil.times);
-    stats::avg_ms(success, &hasil.times);
-    stats::median_ms(success, &hasil.times);
-    stats::mode_or_modus(&hasil.times);
-    stats::p90_p99(success, &hasil.times);
-    stats::grouped_ms(&hasil.times);
+    stats::min_ms(&times);
+    stats::max_ms(&times);
+    stats::avg_ms(success, &times);
+    stats::median_ms(success, &times);
+    stats::mode_or_modus(&times);
+    stats::p90_p99(success, &times);
+    stats::grouped_ms(&times);
 }
 
 pub fn system_info() {
