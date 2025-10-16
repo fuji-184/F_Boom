@@ -65,6 +65,7 @@ pub struct Command {
 pub struct Cli {
     pub max_run: i32,
     pub max_duration: i64,
+    pub tick: Option<bool>,
 }
 
 pub fn read_config(path: &str) -> Config {

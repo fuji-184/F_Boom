@@ -2,7 +2,9 @@
 
 [[app]]
 perf = false
-#command = { first = "./cli/target/release/cli" }
+#command = { first = "./tes/target/release/tes" }
+#command = { first = "./go/tes" }
+#command = { first = "./zigg/main" }
 #command = { first = "./fiber/tes" }
 #command = { first = "./tes/target/release/tes" }
 
@@ -31,8 +33,9 @@ payload = {type = "ping", val = "tes"}
 
 [[app.http]]
 #url = "http://localhost:8080/api/v3/ticker/bookTicker"
-url = "http://127.0.0.1:8080"
+#url = "http://127.0.0.1:8080"
 #url = "http://127.0.0.1:3000/4"
+url = "http://localhost:3000/api/v1/periodic-table/element?symbol=H"
 max_concurrent = 50
 max_duration = 5
 timeout = 5
@@ -58,6 +61,4 @@ tes
 #max_duration = 30
 #batch_size = 100
 
-#[app.cli]
-#max_run = 10
-#max_duration = 10
+

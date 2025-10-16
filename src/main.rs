@@ -44,6 +44,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .help("The path of the config"),
             ),
         )
+        .subcommand(
+            clap::Command::new("cli").about("run with config").arg(
+                clap::Arg::new("config_path")
+                    .value_name("config_path")
+                    .required(true)
+                    .help("The path of the config"),
+            ),
+        )
         .get_matches();
 
     match matches.subcommand_name() {
@@ -82,6 +90,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let config = crate::config_reader::read_config(&config_path);
 
                 grpc::run_grpc(config);
+
+                println!("\n");
+            }
+        }
+        Some("cli") => {
+            if let Some(init_matches) = matches.subcommand_matches("cli") {
+                let config_path = init_matches
+                    .get_one::<String>("config_path")
+                    .unwrap()
+                    .to_string();
+                let config = crate::config_reader::read_config(&config_path);
+
+                cli::run_cli_benchmark(config);
 
                 println!("\n");
             }

@@ -89,7 +89,7 @@ async fn grpc_bidirectional_stream(
 async fn grpc(grpc_config: crate::config_reader::Grpc) {
     let mode_info = grpc_config.mode.replace("_", " ");
     println!(
-        "Benchmarking GRPC {} on {} with {} max conns for {} seconds",
+        " Benchmarking GRPC {} on {} with {} max conns for {} seconds",
         mode_info, grpc_config.url, grpc_config.max_concurrent, grpc_config.max_duration
     );
 

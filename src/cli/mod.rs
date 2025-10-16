@@ -1,1 +1,3 @@
-pub mod run_cli_benchmark;
+mod run_cli_benchmark;
+
+pub use run_cli_benchmark::run_cli_benchmark;

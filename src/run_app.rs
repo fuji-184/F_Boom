@@ -74,7 +74,7 @@ pub fn run_app(
     Ok((child, None))
 }
 
-fn run_perf(pid: u32, command: &str) -> Result<tokio::process::Child, Box<std::io::Error>> {
+pub fn run_perf(pid: u32, command: &str) -> Result<tokio::process::Child, Box<std::io::Error>> {
     let perf_result = tokio::process::Command::new("perf")
         .arg("stat")
         .arg("-e")

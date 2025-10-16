@@ -66,7 +66,7 @@ impl Payload for Text {
 
 async fn ws<P: Payload + Send + 'static>(ws_config: crate::config_reader::Ws) {
     println!(
-        "Benchmarking WebSocket on {} with {} max conns for {} seconds",
+        " Benchmarking WebSocket on {} with {} max conns for {} seconds",
         ws_config.url, ws_config.max_concurrent, ws_config.max_duration
     );
 

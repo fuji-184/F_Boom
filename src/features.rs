@@ -8,7 +8,7 @@ pub fn stats(mut hasil: crate::http::Hasil) {
     let success = hasil.times.len();
 
     println!(
-        "\n\nResult of {} on url {}:\nSuccess      : {}/{} in {:.2} seconds",
+        "\n\n Result of {} on url {}:\nSuccess      : {}/{} in {:.2} seconds",
         hasil.command,
         hasil.url,
         success,
@@ -16,7 +16,7 @@ pub fn stats(mut hasil: crate::http::Hasil) {
         hasil.duration.as_secs_f64()
     );
 
-    println!("success: {}", hasil.times.len());
+    println!(" success: {}", hasil.times.len());
 
     let mut times = vec![];
     for val in hasil.times.iter() {
@@ -45,24 +45,24 @@ pub fn system_info() {
     //std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
 
     if let Some(val) = System::name() {
-        println!("\n\nUsing machine:\nSystem name    : {}", val);
+        println!("\n\n Using machine:\n System name    : {}", val);
     }
 
     if let Some(val) = System::kernel_version() {
-        println!("Kernel version : {}", val);
+        println!(" Kernel version : {}", val);
     }
 
     if let Some(val) = System::os_version() {
-        println!("OS version     : {}", val);
+        println!(" OS version     : {}", val);
     }
 
     if let Some(val) = System::host_name() {
-        println!("Host name      : {}", val);
+        println!(" Host name      : {}", val);
     }
 
     for (_, cpu) in sys.cpus().iter().enumerate() {
         println!(
-            "CPU            : {}, {} cores {} {} {} mhz",
+            " CPU            : {}, {} cores {} {} {} mhz",
             System::cpu_arch(),
             sys.cpus().len(),
             cpu.vendor_id(),
@@ -80,14 +80,14 @@ pub fn system_info() {
     }
     */
 
-    println!("\n\nRAM info : \n");
-    println!("Total RAM     : {}", format_memory(sys.total_memory()));
-    println!("Used RAM      : {}", format_memory(sys.used_memory()));
-    println!("Available RAM : {}", format_memory(sys.available_memory()));
-    println!("Free RAM      : {}", format_memory(sys.free_memory()));
+    println!("\n\n RAM info : \n");
+    println!(" Total RAM     : {}", format_memory(sys.total_memory()));
+    println!(" Used RAM      : {}", format_memory(sys.used_memory()));
+    println!(" Available RAM : {}", format_memory(sys.available_memory()));
+    println!(" Free RAM      : {}", format_memory(sys.free_memory()));
 
-    println!("Total Swap    : {}", format_memory(sys.total_swap()));
-    println!("Used Swap     : {}\n\n", format_memory(sys.used_swap()));
+    println!(" Total Swap    : {}", format_memory(sys.total_swap()));
+    println!(" Used Swap     : {}\n\n", format_memory(sys.used_swap()));
 }
 
 fn format_memory(bytes: u64) -> String {
@@ -113,11 +113,11 @@ async fn monitor_ram_proc(pid: u32) {
         if let Ok(content) = fs::read_to_string(command).await {
             for line in content.lines() {
                 if line.starts_with("VmRSS:") {
-                    println!("[ram] {}", line); // contoh: "VmRSS:   123456 kB"
+                    println!(" [ram] {}", line); // contoh: "VmRSS:   123456 kB"
                 }
             }
         } else {
-            eprintln!("[ram] process {} sudah mati", pid);
+            eprintln!(" [ram] process {} sudah mati", pid);
             break;
         }
     }

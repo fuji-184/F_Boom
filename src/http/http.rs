@@ -6,7 +6,7 @@ use crate::{cli, config_reader::Payload};
 
 fn print_info_http(http_config: &crate::config_reader::Http) {
     println!(
-        "Benchmarking on url {} with max concurrent {} for {} seconds\n\n",
+        " Benchmarking on url {} with max concurrent {} for {} seconds\n\n",
         http_config.url, http_config.max_concurrent, http_config.max_duration
     );
 }
