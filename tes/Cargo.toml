@@ -1,19 +1,8 @@
 [package]
-name = "tes"
+name = "tess"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.8.4"
-rayon = "1.11.0"
-tokio = { version = "1.47.1", features = ["full"] }
-whirlwind = "0.1.1"
-#mimalloc = { version = "0.1", default-features = false }
-
-#[profile.release]
-#opt-level = 3
-#codegen-units = 1
-#panic = 'abort'
-#lto = 'fat'
-#debug = false
-#overflow-checks = false
+axum = { version = "0.8.9", features = ["macros"] }
+tokio = { version = "1.52.3", features = ["full"] }

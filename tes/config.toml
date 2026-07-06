@@ -1,0 +1,66 @@
+# f_boom configuration
+
+# Each [[app]] block defines one application under test.
+# Inside it you can have one or more [[app.http]], [[app.ws]], [[app.grpc]],
+# or one [[app.cli]] section.
+
+[[app]]
+
+# Optional: launch a backend process before benchmarking.
+# command = { first = "./my-server", args = ["--port", "8080"] }
+
+# If true, print the server's stdout/stderr to this terminal.
+# terminal = true
+
+# If true, attach 'perf stat' to the server process.
+# perf = false
+
+
+# HTTP benchmark
+[[app.http]]
+url            = "http://127.0.0.1:8080/1"
+max_concurrent = 100
+max_duration   = 30          # seconds
+timeout        = 10          # per request timeout in seconds
+mode           = ["http1"]   # "http1", "http2"
+method         = "get"       # get | post | put | delete
+
+[[app.http]]
+url            = "http://127.0.0.1:8080/4"
+max_concurrent = 100
+max_duration   = 30          # seconds
+timeout        = 10          # per request timeout in seconds
+mode           = ["http1"]   # "http1", "http2"
+method         = "get"       # get | post | put | delete
+
+# Optional request body (required for POST/PUT):
+# payload = { type = "json", val = '{"key": "value"}' }
+
+
+# WebSocket benchmark
+
+# [[app.ws]]
+# url            = "ws://127.0.0.1:8080/ws"
+# max_concurrent = 50
+# max_duration   = 30
+# payload        = { type = "ping", val = "hello" }   # type: "ping" | "text"
+
+
+# gRPC benchmark
+
+# [[app.grpc]]
+# url            = "http://127.0.0.1:50051"
+# max_concurrent = 50
+# max_duration   = 30
+# mode           = "ping"        # "ping" | "2_way_stream"
+
+
+# CLI benchmark
+
+# [[app]]
+# command = { first = "./my-cli-tool", args = ["--flag"] }
+
+# [[app.cli]]
+# max_run  = 100
+# max_duration = 60
+# tick     = false   # if true, also collect CPU tick measurements
