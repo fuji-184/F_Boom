@@ -1,6 +1,4 @@
-mod http;
-mod http_benchmarker;
+mod bench;
+mod worker;
 
-pub use http::http;
-pub use http_benchmarker::Hasil;
-pub use http_benchmarker::http_benchmark;
+pub use bench::run_http;

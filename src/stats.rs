@@ -1,123 +1,176 @@
 use std::collections::HashMap;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-pub fn req_per_s(success: usize, duration: &std::time::Duration) {
-    let req_per_sec = success as f64 / duration.as_secs_f64();
-    println!(" Req/s        : {:.2}", req_per_sec);
+// All timing samples in nanoseconds, already sorted ascending
+pub struct BenchResult {
+    // Name of the benchmark (command or URL)
+    pub label:      String,
+    // Target URL (empty for CLI benchmarks)
+    pub url:        String,
+    // Wall clock duration of the whole benchmark.
+    pub duration:   std::time::Duration,
+    // Nanosecond latencies of successful requests, sorted ascending
+    pub times_ns:   Vec<u64>,
+    // Total requests attempted (success + failure)
+    pub total_sent: u64,
 }
 
-pub fn success_rate(total_send: u64, success: usize) {
-    if total_send > 0 {
-        println!(
-            " Success rate : {:.2}%",
-            (success as f64 / total_send as f64) * 100.0
-        );
-    } else {
-        println!(" Success rate : 0.00%");
+impl BenchResult {
+    pub fn success(&self) -> usize { self.times_ns.len() }
+}
+
+pub fn print_result(r: &BenchResult) {
+    let n = r.success();
+
+    println!(
+        "\n\n Result for '{}' on '{}':\n Success      : {}/{} in {:.2}s",
+        r.label, r.url, n, r.total_sent, r.duration.as_secs_f64()
+    );
+
+    if n == 0 {
+        println!(" (no successful requests recorded)");
+        return;
     }
+
+    let t = &r.times_ns;
+
+    print_success_rate(r.total_sent, n);
+    print_rps(n, r.duration);
+    print_min(t);
+    print_max(t);
+    print_avg(n, t);
+    print_median(n, t);
+    print_mode(t);
+    print_percentiles(n, t);
+    print_histogram(t);
 }
 
-pub fn min_ms(times: &Vec<u64>) {
-    let min_time = times
-        .iter()
-        .min()
-        .expect(" no http benchmark value is recorded");
-    let min_ms = *min_time as f64 / 1_000_000.0;
-    println!(" Min          : {:.2} ms", min_ms);
-}
-
-pub fn max_ms(times: &Vec<u64>) {
-    let max_time = times.iter().max().unwrap();
-    let max_ms = *max_time as f64 / 1_000_000.0;
-    println!(" Max          : {:.2} ms", max_ms);
-}
-
-pub fn avg_ms(success: usize, times: &Vec<u64>) {
-    let total_times = times.iter().sum::<u64>();
-    let avg_ms = (total_times as f64 / success as f64) / 1_000_000.0;
-    println!(" Avg          : {:.2} ms", avg_ms);
-}
-
-pub fn median_ms(success: usize, times: &Vec<u64>) {
-    let median_ms = if success % 2 == 0 {
-        let mid = success / 2;
-        (times[mid - 1] + times[mid]) as f64 / 2.0 / 1_000_000.0
+fn print_success_rate(total: u64, success: usize) {
+    let rate = if total > 0 {
+        success as f64 / total as f64 * 100.0
     } else {
-        times[success / 2] as f64 / 1_000_000.0
+        0.0
     };
-    println!(" Median       : {:.2} ms", median_ms);
+    println!(" Success rate : {:.2}%", rate);
 }
 
-pub fn mode_or_modus(times: &Vec<u64>) {
-    let mut freq: HashMap<u64, usize> = HashMap::new();
-    for t in times {
-        *freq.entry(*t).or_insert(0) += 1;
+fn print_rps(success: usize, duration: std::time::Duration) {
+    println!(" Req/s        : {:.2}", success as f64 / duration.as_secs_f64());
+}
+
+fn ns_to_ms(ns: u64) -> f64 { ns as f64 / 1_000_000.0 }
+
+fn print_min(t: &[u64]) {
+    println!(" Min          : {:.3} ms", ns_to_ms(*t.first().unwrap()));
+}
+
+fn print_max(t: &[u64]) {
+    println!(" Max          : {:.3} ms", ns_to_ms(*t.last().unwrap()));
+}
+
+fn print_avg(n: usize, t: &[u64]) {
+    let sum: u64 = t.iter().sum();
+    println!(" Avg          : {:.3} ms", ns_to_ms(sum / n as u64));
+}
+
+fn print_median(n: usize, t: &[u64]) {
+    let ms = if n % 2 == 0 {
+        (t[n / 2 - 1] + t[n / 2]) as f64 / 2.0 / 1_000_000.0
+    } else {
+        ns_to_ms(t[n / 2])
+    };
+    println!(" Median       : {:.3} ms", ms);
+}
+
+fn print_mode(t: &[u64]) {
+    // Group by millisecond bucket to keep the map small
+    let mut freq: HashMap<u64, u32> = HashMap::with_capacity(t.len().min(4096));
+    for &ns in t {
+        *freq.entry(ns / 1_000_000).or_insert(0) += 1;
     }
-
     let max_count = freq.values().copied().max().unwrap_or(0);
-
-    let modes: Vec<_> = freq
+    let mut modes: Vec<u64> = freq
         .into_iter()
-        .filter(|&(_, count)| count == max_count)
-        .map(|(val, _)| val as f64 / 1_000_000.0)
+        .filter(|&(_, c)| c == max_count)
+        .map(|(ms, _)| ms)
         .collect();
+    modes.sort_unstable();
 
     if modes.len() == 1 {
-        println!(" Mode/Modus   : {:.2} ms", modes[0]);
+        println!(" Mode         : {} ms", modes[0]);
     } else {
-        println!(" Modes (in ms): {:?}", modes);
+        let strs: Vec<_> = modes.iter().map(|m| format!("{m} ms")).collect();
+        println!(" Mode         : [{}]", strs.join(", "));
     }
 }
 
-pub fn p90_p99(success: usize, times: &Vec<u64>) {
-    let p90_idx = (0.90 * (success as f64 - 1.0)) as usize;
-    let p99_idx = (0.99 * (success as f64 - 1.0)) as usize;
-    let p90_ms = times[p90_idx] as f64 / 1_000_000.0;
-    let p99_ms = times[p99_idx] as f64 / 1_000_000.0;
-    println!(" p90          : {:.2} ms", p90_ms);
-    println!(" p99          : {:.2} ms", p99_ms);
+fn print_percentiles(n: usize, t: &[u64]) {
+    let p = |pct: f64| ns_to_ms(t[((pct * (n as f64 - 1.0)) as usize).min(n - 1)]);
+    println!(" p50          : {:.3} ms", p(0.50));
+    println!(" p90          : {:.3} ms", p(0.90));
+    println!(" p95          : {:.3} ms", p(0.95));
+    println!(" p99          : {:.3} ms", p(0.99));
 }
 
-pub fn grouped_ms(times: &Vec<u64>) {
-    let mut buckets = [0u64; 11];
+fn print_histogram(t: &[u64]) {
+    // Fixed buckets in ms
+    const EDGES: &[u64] = &[1, 2, 5, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 1000];
+    let mut buckets = [0u64; 15]; // 14 edges → 15 buckets
 
-    for t_ns in times.iter() {
-        let t_ms = *t_ns / 1_000_000;
-        match t_ms {
-            0..=10 => buckets[0] += 1,
-            11..=20 => buckets[1] += 1,
-            21..=30 => buckets[2] += 1,
-            31..=40 => buckets[3] += 1,
-            41..=50 => buckets[4] += 1,
-            51..=70 => buckets[5] += 1,
-            71..=100 => buckets[6] += 1,
-            101..=150 => buckets[7] += 1,
-            151..=200 => buckets[8] += 1,
-            201..=300 => buckets[9] += 1,
-            _ => buckets[10] += 1,
-        }
+    for &ns in t {
+        let ms = ns / 1_000_000;
+        let idx = EDGES.partition_point(|&e| ms >= e); 
+        buckets[idx] += 1;
     }
 
-    println!(" 0-10ms       : {}", buckets[0]);
-    println!(" 11-20ms      : {}", buckets[1]);
-    println!(" 21-30ms      : {}", buckets[2]);
-    println!(" 31-40ms      : {}", buckets[3]);
-    println!(" 41-50ms      : {}", buckets[4]);
-    println!(" 51-70ms      : {}", buckets[5]);
-    println!(" 71-100ms     : {}", buckets[6]);
-    println!(" 101-150ms    : {}", buckets[7]);
-    println!(" 151-200ms    : {}", buckets[8]);
-    println!(" 201-300ms    : {}", buckets[9]);
-    println!(" 301ms+       : {}", buckets[10]);
+    println!("\n Latency distribution:");
+    let labels = [
+        "  <1ms", "  1ms", "  2ms", "  5ms", " 10ms", " 20ms",
+        " 30ms", " 50ms", " 75ms", "100ms", "150ms", "200ms",
+        "300ms", "500ms", ">1s  ",
+    ];
+    let max_count = buckets.iter().copied().max().unwrap_or(1).max(1);
+    let bar_width = 40usize;
+    for (i, &count) in buckets.iter().enumerate() {
+        if count == 0 { continue; }
+        let bar_len = (count as usize * bar_width / max_count as usize).max(1);
+        let bar: String = std::iter::repeat('#').take(bar_len).collect();
+        println!("  {} | {:>6} | {}", labels[i], count, bar);
+    }
 }
 
-pub fn cpu_usage(s: &mut System, child: &tokio::process::Child) {
-    s.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::nothing().with_cpu(),
-    );
-    if let Some(process) = s.process(Pid::from(child.id().unwrap() as usize)) {
-        println!(" CPU utilization: {}%", process.cpu_usage());
+pub fn print_system_info() {
+    use sysinfo::System;
+    let mut sys = System::new_all();
+    sys.refresh_all();
+
+    println!("\n System info:");
+    if let Some(v) = System::name()           { println!("  OS        : {v}"); }
+    if let Some(v) = System::kernel_version() { println!("  Kernel    : {v}"); }
+    if let Some(v) = System::os_version()     { println!("  Version   : {v}"); }
+    if let Some(v) = System::host_name()      { println!("  Hostname  : {v}"); }
+
+    if let Some(cpu) = sys.cpus().first() {
+        println!(
+            "  CPU       : {} arch, {} cores, {} {} @ {} MHz",
+            System::cpu_arch().unwrap(),
+            sys.cpus().len(),
+            cpu.vendor_id(),
+            cpu.brand().trim(),
+            cpu.frequency(),
+        );
     }
+
+    println!("\n Memory:");
+    println!("  Total     : {}", fmt_bytes(sys.total_memory()));
+    println!("  Used      : {}", fmt_bytes(sys.used_memory()));
+    println!("  Available : {}", fmt_bytes(sys.available_memory()));
+    println!("  Swap used : {}", fmt_bytes(sys.used_swap()));
+}
+
+fn fmt_bytes(bytes: u64) -> String {
+    let gb = bytes as f64 / (1 << 30) as f64;
+    if gb >= 1.0 { return format!("{gb:.2} GB"); }
+    let mb = bytes as f64 / (1 << 20) as f64;
+    if mb >= 1.0 { return format!("{mb:.2} MB"); }
+    format!("{:.2} KB", bytes as f64 / 1024.0)
 }

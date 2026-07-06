@@ -1,3 +1,3 @@
-mod ws;
+mod bench;
 
-pub use ws::run_ws;
+pub use bench::run_ws;

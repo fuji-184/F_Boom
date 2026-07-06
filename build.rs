@@ -1,4 +1,5 @@
-fn main() {
-    tonic_prost_build::compile_protos("proto/stream.proto").unwrap();
-    tonic_prost_build::compile_protos("proto/echo.proto").unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tonic_build::compile_protos("proto/echo.proto")?;
+    tonic_build::compile_protos("proto/stream.proto")?;
+    Ok(())
 }

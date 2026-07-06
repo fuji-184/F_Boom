@@ -1,64 +1,58 @@
+# f_boom configuration
 
+# Each [[app]] block defines one application under test.
+# Inside it you can have one or more [[app.http]], [[app.ws]], [[app.grpc]],
+# or one [[app.cli]] section.
 
 [[app]]
-perf = false
-#command = { first = "./tes/target/release/tes" }
-#command = { first = "./go/tes" }
-#command = { first = "./zigg/main" }
-#command = { first = "./fiber/tes" }
-#command = { first = "./tes/target/release/tes" }
 
-#command = { first = "../Experiments/lessons/266/app-uws/build/server" }
-#command = { first = "../Experiments/lessons/266/app-drogon/build/server" }
-#command = { first = "../Experiments/lessons/266/app-may/target/release/app-may" }
-#command = { first = "../Experiments/lessons/266/app-actix/target/release/app-axum" }
-#command = { first = "../Experiments/lessons/266/app-ntex/target/release/app-ntex" }
-#command = { first = "../Experiments/lessons/266/app-fiber/app-fiber" }
+# Optional: launch a backend process before benchmarking.
+# command = { first = "./my-server", args = ["--port", "8080"] }
 
-terminal = false
+# If true, print the server's stdout/stderr to this terminal.
+# terminal = true
+
+# If true, attach 'perf stat' to the server process.
+# perf = false
 
 
-[[app.grpc]]
-url = "http://127.0.0.1:50051"
-max_concurrent = 50
-max_duration = 30
-#mode = "2_way_stream"
-mode = "ping"
-
-[[app.ws]]
-url = "ws://127.0.0.1:8080/ws"
-max_concurrent = 50
-max_duration = 30
-payload = {type = "ping", val = "tes"}
-
+# HTTP benchmark
 [[app.http]]
-#url = "http://localhost:8080/api/v3/ticker/bookTicker"
-#url = "http://127.0.0.1:8080"
-#url = "http://127.0.0.1:3000/4"
-url = "http://localhost:3000/api/v1/periodic-table/element?symbol=H"
-max_concurrent = 50
-max_duration = 5
-timeout = 5
-mode = ["http1"]
-method = "get"
-payload = {type = "json", val = """
-tes
-"""}
+url            = "http://127.0.0.1:8080/4"
+max_concurrent = 100
+max_duration   = 30          # seconds
+timeout        = 10          # per request timeout in seconds
+mode           = ["http1"]   # "http1", "http2"
+method         = "get"       # get | post | put | delete
 
-#[[app.http]]
-#url = "http://127.0.0.1:8080/3"
-#url = "http://127.0.0.1:3000/3"
-#max_concurrent = 100
-#max_duration = 30
-
-#[[app]]
-#command = { first = "./fiber/tes" }
-#perf = false
-
-#[[app.http]]
-#url = "http://127.0.0.1:3000"
-#max_concurrent = 100
-#max_duration = 30
-#batch_size = 100
+# Optional request body (required for POST/PUT):
+# payload = { type = "json", val = '{"key": "value"}' }
 
 
+# WebSocket benchmark
+
+# [[app.ws]]
+# url            = "ws://127.0.0.1:8080/ws"
+# max_concurrent = 50
+# max_duration   = 30
+# payload        = { type = "ping", val = "hello" }   # type: "ping" | "text"
+
+
+# gRPC benchmark
+
+# [[app.grpc]]
+# url            = "http://127.0.0.1:50051"
+# max_concurrent = 50
+# max_duration   = 30
+# mode           = "ping"        # "ping" | "2_way_stream"
+
+
+# CLI benchmark
+
+# [[app]]
+# command = { first = "./my-cli-tool", args = ["--flag"] }
+
+# [[app.cli]]
+# max_run  = 100
+# max_duration = 60
+# tick     = false   # if true, also collect CPU tick measurements

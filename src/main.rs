@@ -2,114 +2,83 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod cli;
-mod config_reader;
-mod features;
+mod config;
 mod grpc;
 mod http;
-mod run_app;
+mod process;
 mod stats;
 mod ws;
 
-pub struct Data {
-    time: Option<std::time::Duration>,
-    total_send: u64,
-}
+use clap::{Arg, Command};
+use std::path::PathBuf;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let matches = clap::Command::new("f_boom")
-        .version("0.1")
+fn main() {
+    let matches = Command::new("f_boom")
+        .version("0.1.0")
         .author("Fuji")
-        .about("App boombarder")
-        .subcommand(
-            clap::Command::new("http").about("run with config").arg(
-                clap::Arg::new("config_path")
-                    .value_name("config_path")
-                    .required(true)
-                    .help("The path of the config"),
-            ),
-        )
-        .subcommand(
-            clap::Command::new("ws").about("run with config").arg(
-                clap::Arg::new("config_path")
-                    .value_name("config_path")
-                    .required(true)
-                    .help("The path of the config"),
-            ),
-        )
-        .subcommand(
-            clap::Command::new("grpc").about("run with config").arg(
-                clap::Arg::new("config_path")
-                    .value_name("config_path")
-                    .required(true)
-                    .help("The path of the config"),
-            ),
-        )
-        .subcommand(
-            clap::Command::new("cli").about("run with config").arg(
-                clap::Arg::new("config_path")
-                    .value_name("config_path")
-                    .required(true)
-                    .help("The path of the config"),
-            ),
-        )
+        .about("High-performance load generator for HTTP, WebSocket, gRPC, and CLI")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(Command::new("init").about("Initialize a default config.toml file in the current directory"))
+        .subcommand(sub("http",  "Run an HTTP benchmark using a config file"))
+        .subcommand(sub("ws",    "Run a WebSocket benchmark using a config file"))
+        .subcommand(sub("grpc",  "Run a gRPC benchmark using a config file"))
+        .subcommand(sub("cli",   "Run a CLI (process) benchmark using a config file"))
         .get_matches();
 
-    match matches.subcommand_name() {
-        Some("http") => {
-            if let Some(init_matches) = matches.subcommand_matches("http") {
-                let config_path = init_matches
-                    .get_one::<String>("config_path")
-                    .unwrap()
-                    .to_string();
-                let config = crate::config_reader::read_config(&config_path);
+    let (subcommand, sub_matches) = matches.subcommand().unwrap();
 
-                http::http_benchmark(config);
+    if subcommand == "init" {
+        const DEFAULT_CONFIG: &str = include_str!("../config.toml");
+        let target_file = "config.toml";
 
-                println!("\n");
-            }
-        }
-        Some("ws") => {
-            if let Some(init_matches) = matches.subcommand_matches("ws") {
-                let config_path = init_matches
-                    .get_one::<String>("config_path")
-                    .unwrap()
-                    .to_string();
-                let config = crate::config_reader::read_config(&config_path);
-
-                ws::run_ws(config);
-
-                println!("\n");
-            }
-        }
-        Some("grpc") => {
-            if let Some(init_matches) = matches.subcommand_matches("grpc") {
-                let config_path = init_matches
-                    .get_one::<String>("config_path")
-                    .unwrap()
-                    .to_string();
-                let config = crate::config_reader::read_config(&config_path);
-
-                grpc::run_grpc(config);
-
-                println!("\n");
-            }
-        }
-        Some("cli") => {
-            if let Some(init_matches) = matches.subcommand_matches("cli") {
-                let config_path = init_matches
-                    .get_one::<String>("config_path")
-                    .unwrap()
-                    .to_string();
-                let config = crate::config_reader::read_config(&config_path);
-
-                cli::run_cli_benchmark(config);
-
-                println!("\n");
-            }
+        if std::path::Path::new(target_file).exists() {
+            eprintln!("error: config.toml already exists in the current directory, rename it to fix the duplicated filename");
+            std::process::exit(1);
         }
 
-        _ => println!("invalid command, use f_boom --help to see all the available commands"),
+        match std::fs::write(target_file, DEFAULT_CONFIG) {
+            Ok(_) => {
+                println!("Successfully initialized default config.toml in the current directory");
+            }
+            Err(e) => {
+                eprintln!("error: failed to write config.toml: {e}");
+                std::process::exit(1);
+            }
+        }
+        return; 
     }
 
-    Ok(())
+    let config_path = PathBuf::from(
+        sub_matches
+            .get_one::<String>("config")
+            .expect("config path is required"),
+    );
+
+    let config = match config::load(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    match subcommand {
+        "http" => http::run_http(config),
+        "ws"   => ws::run_ws(config),
+        "grpc" => grpc::run_grpc(config),
+        "cli"  => cli::run_cli(config),
+        _      => unreachable!(), // Clap guarantees all condition is handled
+    }
+
+    println!();
+}
+
+fn sub(name: &'static str, about: &'static str) -> Command {
+    Command::new(name).about(about).arg(
+        Arg::new("config")
+            .value_name("CONFIG")
+            .required(true)
+            .help("Path to the TOML config file"),
+    )
 }
