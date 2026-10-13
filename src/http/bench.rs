@@ -340,7 +340,11 @@ fn build_client(
         .pool_idle_timeout(dur)
         .tcp_keepalive(dur)
         .timeout(std::time::Duration::from_secs(cfg.timeout))
-        .tcp_nodelay(true);
+        .tcp_nodelay(true)
+        // Bench localhost: tanpa evaluasi proxy env per request.
+        .no_proxy()
+        // Seperti wrk: tidak follow redirect.
+        .redirect(reqwest::redirect::Policy::none());
 
     builder = if prep.http2_only {
         builder.http2_prior_knowledge()

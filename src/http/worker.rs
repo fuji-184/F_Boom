@@ -87,7 +87,20 @@ pub(super) async fn run<M: HttpMethod, B: HttpBody>(
         let req = body.apply(M::build(&ctx.client, ctx.url));
 
         let ok = match req.send().await {
-            Ok(resp) => resp.status().is_success(),
+            Ok(mut resp) => {
+                let status_ok = resp.status().is_success();
+                // Drain body sampai habis agar koneksi bisa dipakai ulang
+                // (keep-alive). Tanpa ini hyper menutup koneksi tiap request
+                // = handshake baru per request. Chunk dibuang tanpa ditampung.
+                // Dibatasi client timeout bila server menahan body.
+                loop {
+                    match resp.chunk().await {
+                        Ok(Some(_)) => {}
+                        _ => break,
+                    }
+                }
+                status_ok
+            }
             Err(_) => false,
         };
 
