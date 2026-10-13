@@ -6,6 +6,7 @@ mod config;
 mod grpc;
 mod http;
 mod process;
+mod rt;
 mod stats;
 mod ws;
 

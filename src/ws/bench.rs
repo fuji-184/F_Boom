@@ -1,143 +1,113 @@
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
-use tokio_util::sync::CancellationToken;
 
 use crate::config::WsConfig;
+use crate::rt;
 use crate::stats::{self, BenchResult};
 
-#[derive(Copy, Clone)]
-struct Sample {
-    latency_ns: u64, // 0 = failure
-    sent: u64,
-}
-
-impl Sample {
-    fn ok(ns: u64) -> Self { Self { latency_ns: ns, sent: 1 } }
-    fn fail()      -> Self { Self { latency_ns: 0,  sent: 1 } }
-    fn is_ok(self) -> bool { self.latency_ns > 0 }
-}
-
-trait WsPayload: Send + 'static {
-    fn message(val: &str) -> Message;
+// Trait lokal: tanpa bound Send/Sync — semua task via spawn_local.
+trait WsPayload {
+    // Bangun owned Message per pengiriman dari potongan 'static bersama.
+    // tungstenite 0.24 memiliki payload owned (Vec<u8>/String), jadi tiap
+    // send wajib materialisasi 1 nilai kecil dari slice statis ini.
+    // Tanpa clone dari value lain, tanpa Arc/refcount.
+    fn build(s: &'static str) -> Message;
 }
 
 struct Ping;
 struct Text;
 
 impl WsPayload for Ping {
-    fn message(val: &str) -> Message { Message::Ping(val.as_bytes().to_vec().into()) }
+    fn build(s: &'static str) -> Message { Message::Ping(s.as_bytes().to_vec()) }
 }
 impl WsPayload for Text {
-    fn message(val: &str) -> Message { Message::Text(val.to_owned().into()) }
+    fn build(s: &'static str) -> Message { Message::Text(String::from(s)) }
 }
 
 pub fn run_ws(config: crate::config::Config) {
     stats::print_system_info();
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build tokio runtime");
-
-    rt.block_on(async {
-        for app in config.app {
-            let ws_list = match app.ws {
-                Some(l) if !l.is_empty() => l,
-                _ => continue,
+    // Share-nothing: tanpa runtime global. Tiap target di-shard ke
+    // beberapa OS thread, masing-masing dengan `current_thread` runtime.
+    for app in config.app {
+        let ws_list = match app.ws {
+            Some(l) if !l.is_empty() => l,
+            _ => continue,
+        };
+        for cfg in ws_list {
+            let result = match cfg.payload.kind.as_str() {
+                "ping" => benchmark::<Ping>(cfg),
+                "text" => benchmark::<Text>(cfg),
+                other  => {
+                    eprintln!("error: unknown WebSocket payload type '{other}'; skipping");
+                    continue;
+                }
             };
-            for cfg in ws_list {
-                let result = match cfg.payload.kind.as_str() {
-                    "ping" => benchmark::<Ping>(cfg).await,
-                    "text" => benchmark::<Text>(cfg).await,
-                    other  => {
-                        eprintln!("error: unknown WebSocket payload type '{other}'; skipping");
-                        continue;
-                    }
-                };
-                stats::print_result(&result);
-            }
+            stats::print_result(&result);
         }
-    });
+    }
 }
 
-async fn benchmark<P: WsPayload>(cfg: WsConfig) -> BenchResult {
+fn benchmark<P: WsPayload + 'static>(cfg: WsConfig) -> BenchResult {
     println!(
-        "\n Benchmarking WebSocket on {} | concurrency={} | duration={}s",
-        cfg.url, cfg.max_concurrent, cfg.max_duration
+        "\n Benchmarking WebSocket on {} | concurrency={} | duration={}s (share-nothing, {} threads)",
+        cfg.url, cfg.max_concurrent, cfg.max_duration,
+        rt::num_threads(cfg.max_concurrent as usize),
     );
 
-    let token    = CancellationToken::new();
-    let dur      = std::time::Duration::from_secs(cfg.max_duration);
-    let start    = std::time::Instant::now();
+    let conc = cfg.max_concurrent as usize;
+    if conc == 0 {
+        return BenchResult {
+            label: "ws".into(),
+            url: cfg.url,
+            duration: std::time::Duration::ZERO,
+            times_ns: Vec::new(),
+            total_sent: 0,
+        };
+    }
+
+    let dur = std::time::Duration::from_secs(cfg.max_duration);
+    let n_threads = rt::num_threads(conc);
+    let shards = rt::shard(conc, n_threads);
+
+    let start = std::time::Instant::now();
     let deadline = start + dur;
 
-    // Canceller task
-    {
-        let t = token.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-            t.cancel();
-        });
-    }
+    // SAFETY: `cfg` dimiliki frame ini dan dijamin hidup sampai seluruh
+    // shard join (thread::scope), yaitu sebelum `cfg.url` dipindah ke
+    // hasil. Tidak ada mutasi selama itu. Referensi yang diperpanjang
+    // hanya dibaca (url + payload), tanpa write bersama.
+    let url: &'static str = unsafe { &*(cfg.url.as_str() as *const str) };
+    let payload: &'static str = unsafe { &*(cfg.payload.val.as_str() as *const str) };
+    // &'static str adalah Copy: dibagikan ke tiap thread/task sebagai
+    // salinan 16 byte — tanpa clone heap, tanpa Arc, tanpa Box/drop.
 
-    // Pre build the message once, clone is O(1) for most message types
-    let msg = P::message(&cfg.payload.val);
+    let (mut times_ns, total_sent) = std::thread::scope(|s| {
+        let mut handles = Vec::with_capacity(shards.len());
 
-    let conc = cfg.max_concurrent as usize;
-    let (tx, rx) = flume::bounded::<Sample>(conc * 4);
-
-    for _ in 0..conc {
-        let tok = token.clone();
-        let url = cfg.url.clone();
-        let msg = msg.clone();
-        let stx = tx.clone();
-
-        tokio::spawn(async move {
-            let ws_stream = match tokio_tungstenite::connect_async(&url).await {
-                Ok((s, _)) => s,
-                Err(e) => {
-                    eprintln!("error: WebSocket connect to '{url}' failed: {e}");
-                    return;
-                }
-            };
-
-            let (mut writer, mut reader) = ws_stream.split();
-
-            loop {
-                if tok.is_cancelled() { break; }
-
-                let t0 = std::time::Instant::now();
-
-                if let Err(e) = writer.send(msg.clone()).await {
-                    eprintln!("warning: WebSocket send error: {e}");
-                    break;
-                }
-
-                let sample = match reader.next().await {
-                    Some(Ok(Message::Pong(_))) => Sample::ok(t0.elapsed().as_nanos() as u64),
-                    Some(Ok(Message::Text(_))) => Sample::ok(t0.elapsed().as_nanos() as u64),
-                    Some(Ok(_))   => Sample::fail(),
-                    Some(Err(e))  => {
-                        eprintln!("warning: WebSocket read error: {e}");
-                        break;
-                    }
-                    None => break,
-                };
-
-                if stx.send_async(sample).await.is_err() { break; }
+        for shard_conc in shards {
+            if shard_conc == 0 {
+                continue;
             }
-        });
-    }
+            handles.push(s.spawn(move || -> (Vec<u64>, u64) {
+                let rt = rt::build_current_thread_rt();
+                rt.block_on(shard_main::<P>(url, payload, shard_conc, deadline))
+            }));
+        }
 
-    drop(tx); // main sender, workers drop theirs on exit → rx closes
-
-    let mut times_ns:  Vec<u64> = Vec::with_capacity(1 << 14);
-    let mut total_sent: u64 = 0;
-
-    while let Ok(s) = rx.recv_async().await {
-        total_sent += s.sent;
-        if s.is_ok() { times_ns.push(s.latency_ns); }
-    }
+        let mut times_ns: Vec<u64> = Vec::with_capacity(1 << 14);
+        let mut total_sent: u64 = 0;
+        for h in handles {
+            match h.join() {
+                Ok((mut lat, sent)) => {
+                    total_sent += sent;
+                    times_ns.append(&mut lat);
+                }
+                Err(_) => eprintln!("warning: ws shard thread panicked; partial results kept"),
+            }
+        }
+        (times_ns, total_sent)
+    });
 
     times_ns.sort_unstable();
 
@@ -148,4 +118,84 @@ async fn benchmark<P: WsPayload>(cfg: WsConfig) -> BenchResult {
         times_ns,
         total_sent,
     }
+}
+
+/// Satu shard: berjalan penuh di dalam `current_thread` runtime milik
+/// OS thread-nya via `LocalSet` + `spawn_local`. Semua koneksi & task
+/// terikat di thread ini, tidak pernah migrasi. Tanpa clone value.
+async fn shard_main<P: WsPayload + 'static>(
+    url: &'static str,
+    payload: &'static str,
+    shard_conc: usize,
+    deadline: std::time::Instant,
+) -> (Vec<u64>, u64) {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let mut handles = Vec::with_capacity(shard_conc);
+            for _ in 0..shard_conc {
+                handles.push(tokio::task::spawn_local(ws_worker::<P>(url, payload, deadline)));
+            }
+
+            let mut latencies = Vec::with_capacity(1024 * shard_conc.max(1));
+            let mut sent: u64 = 0;
+            for h in handles {
+                match h.await {
+                    Ok((mut lat, s)) => {
+                        sent += s;
+                        latencies.append(&mut lat);
+                    }
+                    Err(_) => eprintln!("warning: ws worker task panicked"),
+                }
+            }
+            (latencies, sent)
+        })
+        .await
+}
+
+/// Satu koneksi WS yang self-drive sampai deadline. Buffer lokal,
+/// tanpa channel global, tanpa clone dari value lain.
+async fn ws_worker<P: WsPayload + 'static>(
+    url: &'static str,
+    payload: &'static str,
+    deadline: std::time::Instant,
+) -> (Vec<u64>, u64) {
+    let ws_stream = match tokio_tungstenite::connect_async(url).await {
+        Ok((s, _)) => s,
+        Err(e) => {
+            eprintln!("error: WebSocket connect to '{url}' failed: {e}");
+            return (Vec::new(), 0);
+        }
+    };
+
+    let (mut writer, mut reader) = ws_stream.split();
+
+    let mut latencies = Vec::with_capacity(1024);
+    let mut sent: u64 = 0;
+
+    while std::time::Instant::now() < deadline {
+        let t0 = std::time::Instant::now();
+
+        if let Err(e) = writer.send(P::build(payload)).await {
+            eprintln!("warning: WebSocket send error: {e}");
+            break;
+        }
+
+        match reader.next().await {
+            Some(Ok(Message::Pong(_))) | Some(Ok(Message::Text(_))) => {
+                sent += 1;
+                latencies.push(t0.elapsed().as_nanos() as u64);
+            }
+            Some(Ok(_)) => {
+                sent += 1; // dihitung terkirim tapi gagal (latency 0)
+            }
+            Some(Err(e)) => {
+                eprintln!("warning: WebSocket read error: {e}");
+                break;
+            }
+            None => break,
+        }
+    }
+
+    (latencies, sent)
 }

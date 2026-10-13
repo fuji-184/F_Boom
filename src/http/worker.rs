@@ -1,12 +1,15 @@
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
+use std::time::Instant;
 
 pub(super) struct Ctx {
     pub client: reqwest::Client,
-    pub url:    String,
+    // Pinjaman dari config yang diperpanjang ke 'static (lihat shard_main).
+    // Copy 16 byte, tanpa clone / Arc.
+    pub url: &'static str,
 }
 
-pub(super) trait HttpMethod: Send + 'static {
+// Trait lokal: tidak butuh Send/Sync karena semua task jalan via
+// spawn_local di thread yang sama (tidak pernah migrasi).
+pub(super) trait HttpMethod {
     fn build(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder;
 }
 
@@ -20,20 +23,21 @@ impl HttpMethod for Post   { fn build(c: &reqwest::Client, u: &str) -> reqwest::
 impl HttpMethod for Put    { fn build(c: &reqwest::Client, u: &str) -> reqwest::RequestBuilder { c.put(u)    } }
 impl HttpMethod for Delete { fn build(c: &reqwest::Client, u: &str) -> reqwest::RequestBuilder { c.delete(u) } }
 
-pub(super) trait HttpBody: Send + 'static {
+pub(super) trait HttpBody {
     fn apply(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder;
 }
 
 pub(super) struct NoBody;
 
-// Pre built body bytes + content-type header value.
+// Body menunjuk ke payload config (dipinjam, lifetime diperpanjang).
+// Per request: Body::from(&'static str) = bungkus referensi, nol copy.
 pub(super) struct JsonBody {
-    bytes: bytes::Bytes,
+    s: &'static str,
 }
 
 impl JsonBody {
-    pub fn new(json: String) -> Self {
-        Self { bytes: bytes::Bytes::from(json.into_bytes()) }
+    pub fn new(s: &'static str) -> Self {
+        Self { s }
     }
 }
 
@@ -45,62 +49,53 @@ impl HttpBody for NoBody {
 impl HttpBody for JsonBody {
     #[inline(always)]
     fn apply(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        req.header(reqwest::header::CONTENT_TYPE, "application/json")
-           .body(self.bytes.clone()) // clone is O(1) on Bytes
+        // Tanpa .header() per request: content-type JSON dipasang sekali
+        // sebagai default_headers di client (cold). Body dari &'static str
+        // = bungkus referensi, nol copy/alloc.
+        req.body(self.s)
     }
 }
 
-// A single request outcome.  Two u64s = 16 bytes, one cache line word
-#[derive(Copy, Clone)]
-pub(super) struct Sample {
-    // Latency in nanoseconds, 0 means failure
-    pub latency_ns: u64,
-    // Always 1 (carried for lock free accumulation without an extra atomic)
-    pub sent: u64,
-}
-
-impl Sample {
-    #[inline(always)]
-    pub fn ok(ns: u64) -> Self { Self { latency_ns: ns, sent: 1 } }
-    #[inline(always)]
-    pub fn fail() -> Self { Self { latency_ns: 0, sent: 1 } }
-    #[inline(always)]
-    pub fn is_ok(self) -> bool { self.latency_ns > 0 }
-}
-
-// One async task, pull work tokens, fire requests, push results
+// Share-nothing worker: satu task = satu koneksi logis yang self-drive.
+// Tanpa Arc / clone value: caller memberikan raw pointer ke Ctx dan body
+// yang hidup selama shard berjalan. Task hanya copy pointer (8 byte)
+// lalu deref via unsafe. Tidak ada ref-count, tidak ada clone heap.
+// Body dibaca bersama (read-only), aman karena pemilik shard melakukan
+// manual drop SETELAH semua task join.
+//
+// Dijalankan via `spawn_local` (bukan `spawn` global), jadi future TIDAK
+// perlu `Send` dan task tidak pernah pindah thread.
+//
+// SAFETY kontrak (dijamin oleh shard_main):
+// - `ctx_ptr` / `body_ptr` valid & tidak dimutasi selama worker berjalan.
+// - Semua task jalan di `current_thread` runtime yang sama (satu OS thread),
+//   hanya baca, tanpa write bersama.
 pub(super) async fn run<M: HttpMethod, B: HttpBody>(
-    token:   CancellationToken,
-    work_rx: flume::Receiver<()>,
-    ctx:     Arc<Ctx>,
-    tx:      flume::Sender<Sample>,
-    body:    B,
-) {
-    loop {
-        // Check cancellation first
-        tokio::select! {
-            biased;
-            _ = token.cancelled() => break,
-            job = work_rx.recv_async() => {
-                match job {
-                    Err(_) => break, // producer dropped → benchmark is over
-                    Ok(()) => {
-                        let t0  = std::time::Instant::now();
-                        let req = body.apply(M::build(&ctx.client, &ctx.url));
+    ctx_ptr: *const Ctx,
+    body_ptr: *const B,
+    deadline: Instant,
+) -> (Vec<u64>, u64) {
+    // SAFETY: dijamin valid oleh shard_main sampai semua task selesai.
+    let ctx: &Ctx = unsafe { &*ctx_ptr };
+    let body: &B = unsafe { &*body_ptr };
 
-                        let sample = match req.send().await {
-                            Ok(resp) if resp.status().is_success() =>
-                                Sample::ok(t0.elapsed().as_nanos() as u64),
-                            _ =>
-                                Sample::fail(),
-                        };
+    let mut latencies = Vec::with_capacity(4096);
+    let mut sent: u64 = 0;
 
-                        if tx.send_async(sample).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
+    while Instant::now() < deadline {
+        let t0 = Instant::now();
+        let req = body.apply(M::build(&ctx.client, ctx.url));
+
+        let ok = match req.send().await {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        };
+
+        sent += 1;
+        if ok {
+            latencies.push(t0.elapsed().as_nanos() as u64);
         }
     }
+
+    (latencies, sent)
 }

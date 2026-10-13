@@ -15,15 +15,17 @@
 # If true, attach 'perf stat' to the server process.
 # perf = false
 
+command = { first = "./target/release/tess", args = [] }
+
 
 # HTTP benchmark
-[[app.http]]
-url            = "http://127.0.0.1:8080/1"
-max_concurrent = 100
-max_duration   = 30          # seconds
-timeout        = 10          # per request timeout in seconds
-mode           = ["http1"]   # "http1", "http2"
-method         = "get"       # get | post | put | delete
+#[[app.http]]
+#url            = "http://127.0.0.1:8080/1"
+#max_concurrent = 100
+#max_duration   = 30          # seconds
+#timeout        = 10          # per request timeout in seconds
+#mode           = ["http1"]   # "http1", "http2"
+#method         = "get"       # get | post | put | delete
 
 [[app.http]]
 url            = "http://127.0.0.1:8080/4"

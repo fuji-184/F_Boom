@@ -1,16 +1,21 @@
+use std::io::{BufRead, BufReader};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
+
+// Sinkron (std) agar bisa dipakai tanpa Tokio runtime.
+// Share-nothing benchmark tidak lagi memiliki runtime global,
+// jadi manajemen proses server tidak boleh bergantung padanya.
 
 pub struct AppHandle {
-    pub child: tokio::process::Child,
-    pub perf:  Option<tokio::process::Child>,
+    pub child: std::process::Child,
+    pub perf:  Option<std::process::Child>,
 }
 
 impl AppHandle {
-    pub async fn kill(mut self) {
-        let _ = self.child.kill().await;
+    pub fn kill(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
         if let Some(mut p) = self.perf {
-            let _ = p.wait().await;
+            let _ = p.wait();
         }
     }
 }
@@ -22,11 +27,10 @@ pub fn spawn(app: &crate::config::App) -> Option<AppHandle> {
     let show_output = app.terminal.unwrap_or(false);
     let capture_perf = app.perf.unwrap_or(false);
 
-    let mut cmd = tokio::process::Command::new(&cmd_cfg.first);
+    let mut cmd = std::process::Command::new(&cmd_cfg.first);
     if let Some(args) = &cmd_cfg.args {
         cmd.args(args);
     }
-    cmd.kill_on_drop(true);
 
     if show_output {
         cmd.stdout(std::process::Stdio::piped())
@@ -47,7 +51,7 @@ pub fn spawn(app: &crate::config::App) -> Option<AppHandle> {
         }
     };
 
-    let pid = child.id().unwrap_or(0);
+    let pid = child.id();
     println!("started '{}' with pid {}", cmd_cfg.first, pid);
 
     // Give the process a moment to bind its socket / initialize
@@ -72,22 +76,21 @@ pub fn spawn(app: &crate::config::App) -> Option<AppHandle> {
     Some(AppHandle { child, perf })
 }
 
-fn run_perf(pid: u32, label: &str) -> Option<tokio::process::Child> {
+fn run_perf(pid: u32, label: &str) -> Option<std::process::Child> {
     if pid == 0 { return None; }
 
-    let mut cmd = tokio::process::Command::new("perf");
-    cmd.args([
-        "stat", "-e",
-        "cycles,task-clock,context-switches,cpu-migrations,\
-         instructions,branches,branch-misses,cache-references,\
-         cache-misses,page-faults",
-        "-p", &pid.to_string(),
-    ])
-    .kill_on_drop(true)
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::piped());
-
-    match cmd.spawn() {
+    match std::process::Command::new("perf")
+        .args([
+            "stat", "-e",
+            "cycles,task-clock,context-switches,cpu-migrations,\
+             instructions,branches,branch-misses,cache-references,\
+             cache-misses,page-faults",
+            "-p", &pid.to_string(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
         Ok(mut child) => {
             if let Some(stderr) = child.stderr.take() {
                 stream_lines(stderr, format!("perf[{label}]"), true);
@@ -104,11 +107,12 @@ fn run_perf(pid: u32, label: &str) -> Option<tokio::process::Child> {
 
 fn stream_lines<R>(reader: R, label: String, is_stderr: bool)
 where
-    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    R: std::io::Read + Send + 'static,
 {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+    // Satu OS thread per stream; tidak bergantung pada runtime async.
+    std::thread::spawn(move || {
+        let lines = BufReader::new(reader).lines();
+        for line in lines.flatten() {
             if is_stderr {
                 eprintln!("[{label}] {line}");
             } else {
