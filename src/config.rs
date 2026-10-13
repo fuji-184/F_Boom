@@ -11,6 +11,11 @@ pub struct App {
     pub command:  Option<Command>,
     pub terminal: Option<bool>,
     pub perf:     Option<bool>,
+    /// Jumlah OS thread (share-nothing) untuk semua bench di app ini.
+    /// Optional; default = jumlah core. Contoh: num_thread = 10.
+    /// Tidak terikat ke max_concurrent.
+    #[serde(default)]
+    pub num_thread: Option<usize>,
     pub http:     Option<Vec<HttpConfig>>,
     pub ws:       Option<Vec<WsConfig>>,
     pub grpc:     Option<Vec<GrpcConfig>>,

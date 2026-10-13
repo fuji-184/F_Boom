@@ -15,6 +15,10 @@
 # If true, attach 'perf stat' to the server process.
 # perf = false
 
+# Optional: number of OS threads (share-nothing) for all benches in this app.
+# If omitted (or 0), defaults to the number of CPU cores.
+# num_thread = 10
+
 
 # HTTP benchmark
 [[app.http]]

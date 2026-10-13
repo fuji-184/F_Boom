@@ -48,7 +48,9 @@ fn run_all(apps: Vec<App>) -> Vec<BenchResult> {
         // Semua target satu app jalan CONCURRENT (seperti semula),
         // tanpa thread baru: satu scope dipakai bersama (lihat benchmark_app).
         // `label` hanya dipinjam; owned String dibangun sekali per hasil.
-        all_results.extend(benchmark_app(http_list, label));
+        // Thread dipakai bersama satu app: ambil dari app.num_thread.
+        let n_threads = rt::resolve(app.num_thread);
+        all_results.extend(benchmark_app(http_list, label, n_threads));
 
         if let Some(h) = handle { h.kill(); }
     }
@@ -77,7 +79,8 @@ struct TargetOut {
 /// thread baru: SATU `thread::scope` (N OS threads) dipakai bersama untuk
 /// semua target. Tiap thread membangun client + worker untuk tiap target
 /// dan menjalankannya sekaligus via `LocalSet` + `spawn_local`.
-fn benchmark_app(targets: Vec<HttpConfig>, label: &str) -> Vec<BenchResult> {
+/// N berasal dari app.num_thread (default = jumlah core).
+fn benchmark_app(targets: Vec<HttpConfig>, label: &str, n_threads: usize) -> Vec<BenchResult> {
     // Target dengan concurrency 0 dilewati (seperti semula: tanpa hasil).
     let targets: Vec<HttpConfig> = targets
         .into_iter()
@@ -87,9 +90,7 @@ fn benchmark_app(targets: Vec<HttpConfig>, label: &str) -> Vec<BenchResult> {
         return Vec::new();
     }
 
-    // Satu pool thread untuk semua target: tanpa thread baru.
-    let total_conc: usize = targets.iter().map(|c| c.max_concurrent as usize).sum();
-    let n_threads = rt::num_threads(total_conc.max(1));
+    let n_threads = n_threads.max(1);
 
     for c in &targets {
         println!(

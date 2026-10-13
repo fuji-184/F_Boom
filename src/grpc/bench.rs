@@ -9,14 +9,15 @@ pub fn run_grpc(config: crate::config::Config) {
     // Share-nothing: tanpa runtime global. Tiap target di-shard ke
     // beberapa OS thread dengan `current_thread` runtime masing-masing.
     for app in config.app {
+        let n_threads = rt::resolve(app.num_thread);
         let grpc_list = match app.grpc {
             Some(l) if !l.is_empty() => l,
             _ => continue,
         };
         for cfg in grpc_list {
             let result = match cfg.mode.as_str() {
-                "ping"          => benchmark_ping(cfg),
-                "2_way_stream"  => benchmark_stream(cfg),
+                "ping"          => benchmark_ping(cfg, n_threads),
+                "2_way_stream"  => benchmark_stream(cfg, n_threads),
                 other => {
                     eprintln!("error: unknown gRPC mode '{other}'; skipping");
                     continue;
@@ -37,11 +38,11 @@ macro_rules! shard_url {
     }};
 }
 
-fn benchmark_ping(cfg: GrpcConfig) -> BenchResult {
+fn benchmark_ping(cfg: GrpcConfig, n_threads: usize) -> BenchResult {
+    let n_threads = n_threads.max(1);
     println!(
         "\n Benchmarking gRPC ping on {} | concurrency={} | duration={}s (share-nothing, {} threads)",
-        cfg.url, cfg.max_concurrent, cfg.max_duration,
-        rt::num_threads(cfg.max_concurrent as usize),
+        cfg.url, cfg.max_concurrent, cfg.max_duration, n_threads,
     );
 
     let conc = cfg.max_concurrent as usize;
@@ -53,7 +54,6 @@ fn benchmark_ping(cfg: GrpcConfig) -> BenchResult {
     let start = std::time::Instant::now();
     let deadline = start + dur;
 
-    let n_threads = rt::num_threads(conc);
     let shards = rt::shard(conc, n_threads);
     let url: &'static str = shard_url!(cfg);
 
@@ -94,11 +94,11 @@ fn benchmark_ping(cfg: GrpcConfig) -> BenchResult {
     }
 }
 
-fn benchmark_stream(cfg: GrpcConfig) -> BenchResult {
+fn benchmark_stream(cfg: GrpcConfig, n_threads: usize) -> BenchResult {
+    let n_threads = n_threads.max(1);
     println!(
         "\n Benchmarking gRPC bidirectional stream on {} | concurrency={} | duration={}s (share-nothing, {} threads)",
-        cfg.url, cfg.max_concurrent, cfg.max_duration,
-        rt::num_threads(cfg.max_concurrent as usize),
+        cfg.url, cfg.max_concurrent, cfg.max_duration, n_threads,
     );
 
     let conc = cfg.max_concurrent as usize;
@@ -110,7 +110,6 @@ fn benchmark_stream(cfg: GrpcConfig) -> BenchResult {
     let start = std::time::Instant::now();
     let deadline = start + dur;
 
-    let n_threads = rt::num_threads(conc);
     let shards = rt::shard(conc, n_threads);
     let url: &'static str = shard_url!(cfg);
 

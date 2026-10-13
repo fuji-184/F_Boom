@@ -7,17 +7,22 @@
 
 /// Jumlah OS thread untuk benchmark share-nothing.
 ///
-/// `total_conc` adalah total konkurensi yang diminta. Kita tidak pernah
-/// membuat thread lebih banyak dari konkurensi (agar tidak ada thread
-/// menganggur), dan minimal 1.
-pub fn num_threads(total_conc: usize) -> usize {
-    if total_conc == 0 {
-        return 1;
+/// `num_thread` berasal dari config (opsional per target). Jika tidak
+/// diisi (atau 0), default = jumlah core. Sengaja TIDAK diikat ke
+/// max_concurrent: thread boleh lebih sedikit atau lebih banyak dari
+/// koneksi. Shard yang kebagian 0 koneksi di-skip oleh pemanggil.
+pub fn resolve(num_thread: Option<usize>) -> usize {
+    match num_thread {
+        Some(n) if n >= 1 => n,
+        _ => default_threads(),
     }
-    let cpus = std::thread::available_parallelism()
+}
+
+/// Default: setara jumlah core mesin.
+pub fn default_threads() -> usize {
+    std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(4);
-    total_conc.min(cpus).max(1)
+        .unwrap_or(4)
 }
 
 /// Bagi `total` konkurensi ke `threads` shard sep merata mungkin.

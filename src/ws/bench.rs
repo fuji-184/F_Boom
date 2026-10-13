@@ -30,14 +30,15 @@ pub fn run_ws(config: crate::config::Config) {
     // Share-nothing: tanpa runtime global. Tiap target di-shard ke
     // beberapa OS thread, masing-masing dengan `current_thread` runtime.
     for app in config.app {
+        let n_threads = rt::resolve(app.num_thread);
         let ws_list = match app.ws {
             Some(l) if !l.is_empty() => l,
             _ => continue,
         };
         for cfg in ws_list {
             let result = match cfg.payload.kind.as_str() {
-                "ping" => benchmark::<Ping>(cfg),
-                "text" => benchmark::<Text>(cfg),
+                "ping" => benchmark::<Ping>(cfg, n_threads),
+                "text" => benchmark::<Text>(cfg, n_threads),
                 other  => {
                     eprintln!("error: unknown WebSocket payload type '{other}'; skipping");
                     continue;
@@ -48,11 +49,11 @@ pub fn run_ws(config: crate::config::Config) {
     }
 }
 
-fn benchmark<P: WsPayload + 'static>(cfg: WsConfig) -> BenchResult {
+fn benchmark<P: WsPayload + 'static>(cfg: WsConfig, n_threads: usize) -> BenchResult {
+    let n_threads = n_threads.max(1);
     println!(
         "\n Benchmarking WebSocket on {} | concurrency={} | duration={}s (share-nothing, {} threads)",
-        cfg.url, cfg.max_concurrent, cfg.max_duration,
-        rt::num_threads(cfg.max_concurrent as usize),
+        cfg.url, cfg.max_concurrent, cfg.max_duration, n_threads,
     );
 
     let conc = cfg.max_concurrent as usize;
@@ -67,7 +68,6 @@ fn benchmark<P: WsPayload + 'static>(cfg: WsConfig) -> BenchResult {
     }
 
     let dur = std::time::Duration::from_secs(cfg.max_duration);
-    let n_threads = rt::num_threads(conc);
     let shards = rt::shard(conc, n_threads);
 
     let start = std::time::Instant::now();
