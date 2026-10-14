@@ -19,6 +19,10 @@
 # If omitted (or 0), defaults to the number of CPU cores.
 # num_thread = 10
 
+# Optional: HTTP client implementation: "hyper" (default) or "raw"
+# (raw TCP + hand-written HTTP/1.1, no client library overhead).
+# http_mode = "raw"
+
 
 # HTTP benchmark
 [[app.http]]

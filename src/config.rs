@@ -16,10 +16,28 @@ pub struct App {
     /// Tidak terikat ke max_concurrent.
     #[serde(default)]
     pub num_thread: Option<usize>,
+    /// Implementasi klien HTTP: "hyper" (default) atau "raw"
+    /// (TCP mentah + HTTP/1.1 tulisan tangan, tanpa dependensi klien).
+    #[serde(default)]
+    pub http_mode: HttpMode,
     pub http:     Option<Vec<HttpConfig>>,
     pub ws:       Option<Vec<WsConfig>>,
     pub grpc:     Option<Vec<GrpcConfig>>,
     pub cli:      Option<CliConfig>,
+}
+
+/// Pilihan implementasi klien HTTP. Default = Hyper.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HttpMode {
+    Hyper,
+    Raw,
+}
+
+impl Default for HttpMode {
+    fn default() -> Self {
+        Self::Hyper
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

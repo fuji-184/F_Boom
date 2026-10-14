@@ -1,11 +1,10 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 
-use crate::config::HttpConfig;
+use crate::config::{App, HttpConfig, HttpMode};
 use crate::process;
 use crate::rt;
 use crate::stats::{self, BenchResult};
 use super::worker::{self, MethodKind, TargetState};
-use crate::config::App;
 
 pub fn run_http(config: crate::config::Config) {
     stats::print_system_info();
@@ -51,8 +50,10 @@ fn run_all(apps: Vec<App>) -> Vec<BenchResult> {
         // tanpa thread baru: satu scope dipakai bersama (lihat benchmark_app).
         // `label` hanya dipinjam; owned String dibangun sekali per hasil.
         // Thread dipakai bersama satu app: ambil dari app.num_thread.
+        // Implementasi klien (hyper/raw) per app: app.http_mode.
         let n_threads = rt::resolve(app.num_thread);
-        all_results.extend(benchmark_app(http_list, label, n_threads));
+        let mode = app.http_mode;
+        all_results.extend(benchmark_app(http_list, label, n_threads, mode));
 
         if let Some(h) = handle { h.kill(); }
     }
@@ -61,25 +62,28 @@ fn run_all(apps: Vec<App>) -> Vec<BenchResult> {
 }
 
 /// Persiapan per-target yang dihitung sekali di main thread.
-struct Prep {
-    deadline: std::time::Instant,
+/// Dibagi ke raw.rs (pub(super)).
+pub(super) struct Prep {
+    pub(super) deadline: std::time::Instant,
     /// Konkurrensi shard per OS thread, len == n_threads.
-    shards: Vec<usize>,
+    pub(super) shards: Vec<usize>,
 }
 
 /// Target yang lolos filter + alamat sudah resolve (sekali, cold).
-struct Live {
-    cfg: HttpConfig,
-    addr: SocketAddr,
+/// Dibagi ke raw.rs (pub(super)).
+pub(super) struct Live {
+    pub(super) cfg: HttpConfig,
+    pub(super) addr: SocketAddr,
 }
 
 /// Hasil shard satu thread untuk satu target.
+/// Dibagi ke raw.rs (pub(super)).
 #[derive(Default)]
-struct TargetOut {
-    lat: Vec<u64>,
-    sent: u64,
+pub(super) struct TargetOut {
+    pub(super) lat: Vec<u64>,
+    pub(super) sent: u64,
     /// Waktu task terakhir target ini selesai di thread ini.
-    finished: Option<std::time::Instant>,
+    pub(super) finished: Option<std::time::Instant>,
 }
 
 /// Benchmark semua target HTTP milik satu app secara CONCURRENT tanpa
@@ -91,7 +95,12 @@ struct TargetOut {
 /// Transport: hyper HTTP/1 langsung (tanpa reqwest). Mendukung skema
 /// `http://` saja; `https://` dan mode `http2`-only dilewati dengan pesan
 /// yang jelas (bukan diam-diam).
-fn benchmark_app(targets: Vec<HttpConfig>, label: &str, n_threads: usize) -> Vec<BenchResult> {
+fn benchmark_app(
+    targets: Vec<HttpConfig>,
+    label: &str,
+    n_threads: usize,
+    mode: HttpMode,
+) -> Vec<BenchResult> {
     // Filter + resolve sekali (cold). Target tak didukung dilewati LOUD.
     let mut live: Vec<Live> = Vec::with_capacity(targets.len());
     for cfg in targets.into_iter().filter(|c| c.max_concurrent > 0) {
@@ -108,8 +117,12 @@ fn benchmark_app(targets: Vec<HttpConfig>, label: &str, n_threads: usize) -> Vec
 
     for l in &live {
         println!(
-            "\n Benchmarking {} hyper-direct on {} | concurrency={} | duration={}s (share-nothing, {} threads, concurrent)",
+            "\n Benchmarking {} {} on {} | concurrency={} | duration={}s (share-nothing, {} threads, concurrent)",
             l.cfg.method.to_uppercase(),
+            match mode {
+                HttpMode::Hyper => "hyper-direct",
+                HttpMode::Raw => "raw-tcp",
+            },
             l.cfg.url, l.cfg.max_concurrent, l.cfg.max_duration, n_threads,
         );
     }
@@ -139,7 +152,7 @@ fn benchmark_app(targets: Vec<HttpConfig>, label: &str, n_threads: usize) -> Vec
             let preps = &preps;
             handles.push(s.spawn(move || -> Vec<TargetOut> {
                 let rt = rt::build_current_thread_rt();
-                rt.block_on(thread_main(live, preps, t))
+                rt.block_on(thread_main(live, preps, t, mode))
             }));
         }
 
@@ -183,17 +196,19 @@ fn benchmark_app(targets: Vec<HttpConfig>, label: &str, n_threads: usize) -> Vec
 }
 
 /// Potongan URL tanpa alokasi (pinjaman dari string config).
-struct UrlParts<'a> {
-    host: &'a str,
-    port: u16,
-    authority: &'a str, // host[:port] — untuk header Host
-    path: &'a str,      // origin-form, "/" bila kosong
+/// Dibagi ke raw.rs (pub(super)).
+pub(super) struct UrlParts<'a> {
+    pub(super) host: &'a str,
+    pub(super) port: u16,
+    pub(super) authority: &'a str, // host[:port] — untuk header Host
+    pub(super) path: &'a str,      // origin-form, "/" bila kosong
 }
 
 /// Pecah `http://host[:port][/path]` manual: tanpa parse + alokasi penuh.
 /// Kembalikan None untuk skema selain http (https tidak didukung di
-/// mode hyper-direct) atau bentuk tak valid.
-fn split_url(url: &str) -> Option<UrlParts<'_>> {
+/// mode hyper-direct maupun raw) atau bentuk tak valid.
+/// Dibagi ke raw.rs (pub(super)).
+pub(super) fn split_url(url: &str) -> Option<UrlParts<'_>> {
     let rest = url.strip_prefix("http://")?;
     let (authority, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
@@ -261,10 +276,24 @@ fn resolve_target(cfg: &HttpConfig) -> Option<SocketAddr> {
 }
 
 /// Satu OS thread: menjalankan shard dari SEMUA target sekaligus dalam
-/// satu `LocalSet`. Tanpa Arc / clone value: tiap target di-Box sekali
+/// satu `LocalSet`. Dispatch SEKALI ke implementasi klien sesuai
+/// app.http_mode (hyper dipertahankan, raw = TCP mentah).
+async fn thread_main(
+    live: &[Live],
+    preps: &[Prep],
+    t: usize,
+    mode: HttpMode,
+) -> Vec<TargetOut> {
+    match mode {
+        HttpMode::Hyper => hyper_drive(live, preps, t).await,
+        HttpMode::Raw => super::raw::drive(live, preps, t).await,
+    }
+}
+
+/// Drive mode hyper: tanpa Arc / clone value — tiap target di-Box sekali
 /// (TargetState) sebagai raw pointer, manual drop setelah semua join.
 /// `path`/`authority`/body hanya pinjaman dari `cfg` (lihat SAFETY).
-async fn thread_main(
+async fn hyper_drive(
     live: &[Live],
     preps: &[Prep],
     t: usize,
