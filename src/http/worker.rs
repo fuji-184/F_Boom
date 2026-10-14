@@ -75,52 +75,40 @@ pub(super) async fn run(state_ptr: *const TargetState, deadline: Instant) -> (Ve
                 }
             };
 
-        // Driver koneksi jalan berdampingan di thread yang sama.
-        // Mati sendiri saat koneksi tutup; worker deteksi lewat error send.
-        tokio::task::spawn_local(async move {
-            let _ = conn.await;
-        });
+        // Driver koneksi INLINE bersama request (tanpa task driver terpisah):
+        // 1 koneksi = 1 task, separuh wakeup/scheduling dibanding semula.
+        // Selesainya conn = koneksi mati → reconnect. Timeout ikut membuang
+        // koneksi (yang ditinggalkan tak lagi reusable) lalu reconnect bersih.
+        tokio::pin!(conn);
 
         while Instant::now() < deadline {
             let t0 = Instant::now();
             let req = build_request(st);
 
-            // Timeout melingkupi send + baca body penuh (semantik sama
-            // seperti reqwest .timeout(): satu timer per request).
+            // Timeout melingkupi send + baca body penuh.
             let r = tokio::time::timeout(st.timeout, async {
-                let resp = sender.send_request(req).await.map_err(|_| ())?;
-                let ok = resp.status().is_success();
-                // Drain body sampai habis agar koneksi reusable (keep-alive).
-                // Frame dibuang tanpa ditampung.
-                use http_body::Body as _;
-                let mut body = std::pin::pin!(resp.into_body());
-                loop {
-                    match std::future::poll_fn(|cx| body.as_mut().poll_frame(cx)).await {
-                        Some(Ok(_)) => {}
-                        _ => break,
-                    }
+                tokio::select! {
+                    biased;
+                    res = do_request(&mut sender, req) => Some(res),
+                    _ = &mut conn => None,
                 }
-                Ok::<bool, ()>(ok)
             })
             .await;
 
             match r {
                 // Sukses (status 2xx atau bukan — tetap dihitung terkirim,
                 // latency hanya untuk yang sukses, seperti semula).
-                Ok(Ok(ok)) => {
+                Ok(Some(Ok(ok))) => {
                     sent += 1;
                     if ok {
                         latencies.push(t0.elapsed().as_nanos() as u64);
                     }
                 }
-                // Error hyper / body rusak → koneksi tak sehat, reconnect.
-                Ok(Err(())) => {
+                // Error hyper / body rusak / conn mati / timeout →
+                // koneksi tak sehat, reconnect (terhitung 1 gagal).
+                _ => {
                     sent += 1;
                     continue 'outer;
-                }
-                // Timeout → koneksi mungkin masih sehat, pakai terus.
-                Err(_) => {
-                    sent += 1;
                 }
             }
         }
@@ -128,6 +116,25 @@ pub(super) async fn run(state_ptr: *const TargetState, deadline: Instant) -> (Ve
     }
 
     (latencies, sent)
+}
+
+/// Satu request penuh: kirim + baca body sampai habis (untuk keep-alive).
+/// Body dibuang tanpa ditampung. Err = koneksi tak sehat → panggil reconnect.
+async fn do_request(
+    sender: &mut hyper::client::conn::http1::SendRequest<ReqBody>,
+    req: http::Request<ReqBody>,
+) -> Result<bool, ()> {
+    let resp = sender.send_request(req).await.map_err(|_| ())?;
+    let ok = resp.status().is_success();
+    use http_body::Body as _;
+    let mut body = std::pin::pin!(resp.into_body());
+    loop {
+        match std::future::poll_fn(|cx| body.as_mut().poll_frame(cx)).await {
+            Some(Ok(_)) => {}
+            _ => break,
+        }
+    }
+    Ok(ok)
 }
 
 /// Bangun owned Request per pengiriman. Satu-satunya alokasi di hot path

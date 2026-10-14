@@ -15,7 +15,7 @@
 # If true, attach 'perf stat' to the server process.
 # perf = false
 
-command = { first = "./target/release/tess", args = [] }
+#command = { first = "./target/release/tess", args = [] }
 
 
 # HTTP benchmark
